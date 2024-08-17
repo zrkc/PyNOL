@@ -17,19 +17,19 @@ G = scale * D * Gamma**2
 C = scale * 1 / 2 * (D * Gamma)**2
 L_smooth = Gamma**2
 
-seeds = range(3)
+seeds = range(5)
 domain = Ball(dimension=dimension, radius=R)
 min_step_size, max_step_size = D / (G * T**0.5), D / G
+ogd = [OGD(domain, step_size=min_step_size, seed=seed) for seed in seeds]
+usc = [USC(domain, T, G, seed=seed) for seed in seeds]
 
-meta_kwargs = {
-    'domain'    : domain,
-    'T' : T,
-    'G' : G,
-}
-base_kwargs = {
-    'domain'    : domain,
-    'T' : T,
-    'G' : G,
-}
+learners = [ogd, usc]
+labels = ['OGD', 'USC']
 
-usc = [USC(domain, T, G, False, seed=seed) for seed in seeds]
+if __name__ == "__main__":
+    loss_func = SquareLoss(feature=feature, label=label, scale=scale)
+    env = Environment(func_sequence=loss_func)
+    _, loss, _, _ = multiple_online_learning(T, env, learners)
+    if os.path.exists('./results') is False:
+        os.makedirs('./results')
+    plot(loss, labels, file_path='./results/universal.pdf')

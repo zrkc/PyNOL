@@ -577,6 +577,60 @@ class Prod(Meta):
         self._w[self._active_index] = w
 
 
+class Adapt_ML_Prod(Meta):
+    """``Adapt_ML_Prod``. No activation mechanism designed,
+    may be introduced later.
+
+    .. math::
+
+        \\ell_{t,i} = \\frac{ \\langle \\nabla f_t(x_t), \
+            x_{t,i} \\rangle + GD }{ 2GD } \n
+        \\ell_t = \\sum_{i=1}^N p_{t,i}\\ell_{t,i} \n
+        \\eta_{t,i} = \\min\\{ 1/2, \\sqrt{ \\ln N / \
+            (1 + \\sum_{s=1}^t (\\ell_s - \\ell_{s,i})^2 ) } \\} \n
+        w_{t,i} = (w_{t-1,i}(1 + \\eta_{t-1,i}(\\ell_t - \\ell_{t,i}))) \
+            ^ {\\eta_{t,i} / \\eta_{t-1,i}} \n
+        p_{t+1,i} = \\frac{ \\eta_{t,i}w_{t,i} } \
+            { \\sum_{j=1}^N \\eta_{t,j}w_{t,j} },
+
+    where :math:`\\ell_t,\\ell_{t,i}\\in[0,1],\\forall t\\in[T],i\\in[N]`,
+    and :math:`w_{0,1}=1/N`.
+
+    Args:
+        N (int): Number of the total base-learners.
+        G (float).
+        D (float).
+
+    References:
+        TODO
+    
+    """
+    
+    def __init__(self, N: int, G: float, D: float):
+        super().__init__(np.ones(N), None)
+        self.N, self.lnN, self.GD = N, np.log(N), G * D
+        self.eta = np.ones(N) * min(0.5, np.sqrt(self.lnN))
+        self.w = np.ones(N) / N
+        self.cum_loss_diff = np.zeros(N) # \sum_s (\ell_s - \ell_{s,i})^2
+    
+    def opt_by_gradient(self, surrogate_loss_bases, loss_meta):
+        # use InnerSurrogateMeta as surrogate loss of bases
+        ells = (surrogate_loss_bases + self.GD) / (self.GD * 2) # normalization
+        ell = np.dot(ells, self.prob)
+        prob = np.zeros(self.N)
+        for i in range(self.N):
+            self.cum_loss_diff[i] += (ell - ells[i])**2
+            eta_i = min(0.5, np.sqrt(self.lnN / (1 + self.cum_loss_diff[i])))
+            w_i = (self.w[i] * (1 + self.eta[i] * (ell - ells[i]))) \
+                  ** (eta_i / self.eta[i])
+            self.eta[i], self.w[i] = eta_i, w_i
+            prob[i] = eta_i * w_i
+        self.prob = prob[i] / np.sum(prob) if np.sum(prob)> 0 \
+                    else np.ones(self.N) / self.N
+        self.t += 1
+        return self.prob
+
+
 class AdaNormalHedge(Meta):
     """Implementation of Achieving All with No Parameters: AdaNormalHedge.
 
