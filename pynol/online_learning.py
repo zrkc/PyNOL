@@ -34,6 +34,7 @@ def online_learning(T, env: Environment, learner: Union[Base, Model]):
         start_time = time.time()
         x[t], loss[t], surrogate_loss[t] = learner.opt(env[t])
         tm[t] = time.time() - start_time
+        if t % 100 == 0 and hasattr(learner, 'meta'): print(t, learner.meta.prob)
     return x, loss, surrogate_loss, tm
 
 

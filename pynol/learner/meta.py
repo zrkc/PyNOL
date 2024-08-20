@@ -625,7 +625,7 @@ class Adapt_ML_Prod(Meta):
                   ** (eta_i / self.eta[i])
             self.eta[i], self.w[i] = eta_i, w_i
             prob[i] = eta_i * w_i
-        self.prob = prob[i] / np.sum(prob) if np.sum(prob)> 0 \
+        self.prob = prob / np.sum(prob) if np.sum(prob)> 0 \
                     else np.ones(self.N) / self.N
         self.t += 1
         return self.prob
