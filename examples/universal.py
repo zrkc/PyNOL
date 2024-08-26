@@ -12,48 +12,64 @@ from pynol.utils.plot import plot
 import numpy as np
 import PyPDF2
 
+def get_contaminated_seq_by_lambda(T, g): # K = g(T)
+    is_cont = np.zeros(T) # first round is no cont by default
+    K = 0
+    for t in range(1, T):
+        if K + 1 <= g(t):
+            is_cont[t] = 1
+            K += 1
+    return is_cont
+
 if __name__ == "__main__":
-    # 为什么 seed=0 跑的那么好？为什么 OGD-Str 跑的那么差？
-    T, KlogT, multiple, loss_func_seed = 10000, False, 1000, 0
-    # using new loss func, with comparator fixed
-    # and each dT with fixed k randomized inside, which is either O(log T) or O(log^2 T)
 
-    loss_func = ContaminatedStronglyConvexForLowerBound(
-       T=T, KlogT=KlogT, multiple=multiple, seed=loss_func_seed)
-    # loss_func = ContaminatedOCO_E2(seed=loss_func_seed)
+    T = 10000 # TODO 1
+    cont_type = ['No contamination', 'K=(log T)^2']
+    cont_type_id = 1 # TODO 2
+    if cont_type_id == 0:
+        is_cont = get_contaminated_seq_by_lambda(T, lambda t : 0)
+    elif cont_type_id == 1:
+        is_cont = get_contaminated_seq_by_lambda(T, lambda t : 2 * ((np.log(t)) ** 2))
 
+    loss_func = ContaminatedStronglyConvexForLowerBound(T=T, is_contaminated=is_cont)
+ 
     dimension, D, G, sigma = loss_func.dim, loss_func.D, loss_func.G, loss_func.sigma
     domain = Ball(dimension=dimension, radius=D/2)
     
     seeds = range(4)
     ogd_con = [OGD(domain, step_size=[D/(G*np.sqrt(t+1)) for t in range(T)], seed=seed) for seed in seeds]
     ogd_str = [OGD(domain, step_size=[1/(sigma*(t+1)) for t in range(T)], seed=seed) for seed in seeds]
-    # ogd_str_1 = [OGD(domain, step_size=[1/(4*sigma*(t+1)) for t in range(T)], seed=seed) for seed in seeds]
-    # ogd_str_2 = [OGD(domain, step_size=[1/(16*sigma*(t+1)) for t in range(T)], seed=seed) for seed in seeds]
-    # ogd_str_3 = [OGD(domain, step_size=[1/(64*sigma*(t+1)) for t in range(T)], seed=seed) for seed in seeds]
     usc = [USC(domain, T, G, seed=seed) for seed in seeds]
-
-    learners = [usc] #, ogd_con, ogd_str, ogd_str_1, ogd_str_2, ogd_str_3]
-    labels = ['USC'] #, 'OGD-Con', 'OGD-Str', 'OGD-Str-1', 'OGD-Str-2', 'OGD-Str-3']
+    learners = [ogd_con, ogd_str, usc] #
+    labels = ['OGD-Con', 'OGD-Str', 'USC'] #
     
     env = Environment(func_sequence=loss_func, use_surrogate_grad=False)
     
     _, loss, _, _ = multiple_online_learning(T, env, learners)
-    loss = np.cumsum(loss, axis=2)
-    loss_exp = np.exp(loss) # take exponential on regret to see if it's O(log T)
+    loss = np.cumsum(loss, axis=2) # already taken pre-sum
+    loss_r, labels_r = np.zeros_like(loss), []
+    for i in range(loss.shape[0]):
+        if labels[i] == 'OGD-Con':
+            cmp_order = lambda t : np.sqrt(t+1) # t+1> 0
+            labels_r.append(labels[i]+' / sqrt(T)')
+        else:
+            cmp_order = lambda t : np.log(t+2) # t+2> 1
+            labels_r.append(labels[i]+' / log(T)')
+        for j in range(loss_r.shape[1]):
+            for t in range(loss_r.shape[2]):
+                loss_r[i, j, t] = loss[i, j, t] / cmp_order(t)
+
+    exp_name = f'{cont_type[cont_type_id]}, T{T}, D{D}, G{G}, sigma{sigma}'
     if os.path.exists('./results') is False:
         os.makedirs('./results')
-    assume = ['K', 'KlogT']
-    plot(loss, labels, cum=False, 
-         title=f'acc-loss, verify Ω(logT+sqrt({assume[KlogT]})), m={multiple}, seed={loss_func_seed}',
+    plot(loss, labels, cum=False, title=f'regret, {exp_name}',
          file_path='./results/tmp.pdf')
-    plot(loss_exp, labels, cum=False,
-         title=f'acc-loss-exp, verify Ω(logT+sqrt({assume[KlogT]})), m={multiple}, seed={loss_func_seed}',
-         file_path='./results/tmp-e.pdf')
+    plot(loss_r, labels_r, cum=False, title=f'regret / cmp-order, {exp_name}',
+         file_path='./results/tmp-r.pdf')
     merger = PyPDF2.PdfMerger()
     merger.append('./results/tmp.pdf')
-    merger.append('./results/tmp-e.pdf')
-    merger.write(f'./results/con-verlb-{assume[KlogT]}-m{multiple}-s{loss_func_seed}.pdf')
+    merger.append('./results/tmp-r.pdf')
+    merger.write(f'./results/{exp_name}.pdf')
     merger.close()
     os.remove('./results/tmp.pdf')
-    os.remove('./results/tmp-e.pdf')
+    os.remove('./results/tmp-r.pdf')

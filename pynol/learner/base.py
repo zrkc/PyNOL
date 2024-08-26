@@ -34,6 +34,15 @@ class Base(ABC):
         self.x = self.domain.init_x(prior, seed)
         self.t = 0
 
+    def get_decision(self, env: Environment):
+        """
+        opt by optimism first,
+        then pay decision, update env
+        then opt by gradient with new env.
+        """
+        self.opt_by_optimism(env.optimism)
+        return self.x
+
     def opt(self, env: Environment):
         """The optimization process of the base algorithm.
 
@@ -51,7 +60,7 @@ class Base(ABC):
                 loss (float): Origin loss at the current round. \n
                 surrogate_loss (float): the surrogate loss at the current round.
         """
-        self.opt_by_optimism(env.optimism)
+        # self.opt_by_optimism(env.optimism)
         return self.opt_by_gradient(env)
 
     def get_step_size(self):
@@ -141,6 +150,7 @@ class OGD(Base):
         step_size = self.get_step_size()
         self.x = x - step_size * grad
         self.x = self.domain.project(self.x)
+        self.t += 1 # add t at the end of every opt_by_gradient  
         return x, loss, surrogate_loss
 
 

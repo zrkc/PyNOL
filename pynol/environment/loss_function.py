@@ -227,76 +227,90 @@ class ContaminatedStronglyConvexForLowerBound(LossFunction):
         import numpy as np
         func = ContaminatedStronglyConvex()
 
-    Then, call ``func[t]`` will return the function :math:`f_t(x) =
-    \\frac{\\sigma}{2}(\\Vert x+b_t \\Vert_2^2 - \\Vert b_t \\Vert_2^2)` 
-    at round :math:`t` if it is not contaminated,
-    otherwise :math:`f_t(x) = \\langle b_t, x \\rangle`,
-    where :math:`b_t` is sampled from the standard normal distribution. \n
-    Besides, the upper bound of gradient norm is calculated as ``self.G``.
     """
 
     def __init__(self,
                  T: int = 10000,
-                 KlogT: bool = True, # True then K=mlogT, else K=m*(logT)^2
-                 multiple: int = 5, # m=0 in no contamination case 
-                 dimension: int = 3,
-                 D: float = 2,
-                 sigma: float = 1e-3,
-                 seed: int = 0) -> None:
-        np.random.seed(seed)
-        self.dim, self.D, self.sigma = dimension, D, sigma
-        # construct loss func
-        self.bias = np.random.randn(T, dimension)
-        for _ in range(0, T, 100):
-            fixed_bias = np.random.randn(dimension) * 0
-            for t in range(_, _+100): self.bias[t] += fixed_bias
-        self.is_sc, self.KlogT, self.mul = np.ones(T), KlogT, multiple
-        for t in range(1, T): self.is_sc[t] = 0 if self.is_contaminated(t+1) else 1
-        # calculate comparator loss
-        self.Fmin = np.zeros(T) # min_x sum_{t=1}^T f_t(x) = min_x F(x)
-        Fa, Fb = sigma / 2, sigma * self.bias[0] # F(x) = Fa x^2 + Fb x
-        self.Fmin[0] = self.cal_minimum(Fa, Fb)
-        for t in range(1, T):
-            Fa += self.is_sc[t] * sigma / 2
-            Fb += sigma * self.bias[t]
-            self.Fmin[t] = self.cal_minimum(Fa, Fb)
-        # calculate G
-        G1, G2 = 0., 0.
-        for t in range(T):
-            bias_norm = np.linalg.norm(self.bias[t])
-            if self.is_sc[t]: G1 = max(G1, sigma * (D + bias_norm))
-            else: G2 = max(G2, sigma * bias_norm)
-        print(f'G1 = {G1}, G2 = {G2}')
-        self.G = max(G1, G2)
+                 is_contaminated = None,
+                 dimension: int = 3, # dim>=3 to ensure non-empty null-space
+                 D: float = 10.,
+                 G: float = 1.,
+                 sigma: float = 1e-1) -> None:
+        self.T, self.is_contaminated = T, is_contaminated
+        if is_contaminated is None:
+            print('Warning: Set no contamination case by default.')
+            self.is_contaminated = np.zeros(T)
+        self.oblivious = False # non-oblivious by upd_with_decision
+        self.eps = 1e-9
+        self.dim, self.D, self.R, self.G, self.sigma = dimension, D, D/2, G, sigma
+        # calculate comparator loss sum_{t=1}^T f_t(x) = F(x) = Fa x^2 + Fb x
+        self.FA, self.FB = 0., np.zeros(dimension) # FA = sigma_{1:t} / 2
+        self.argminF, self.minF = np.zeros(dimension), 0.
+        self.t, self.fa, self.fb, self.fc = -1, None, None, None
+        # f_t = fa x^2 + fb x + fc, fc = min F_{t-1} - min F_t is additional term
+        # t indicates which round is the loss function at, and add 1 when upd
         
     def __getitem__(self, t: int):
-        b, Fm, _Fm = self.bias[t], self.Fmin[t], self.Fmin[t-1] if t else 0
-        if self.is_sc[t]:
-            return lambda x: \
-                self.sigma / 2 * (np.dot(x+b, x+b) - np.dot(b, b)) - Fm + _Fm
-        else:
-            return lambda x: \
-                self.sigma * np.dot(x, b) - Fm + _Fm
-        
-    def is_contaminated(self, t):
+        if self.t != t: return None
+        return lambda x : \
+            self.fa * np.dot(x, x) + np.dot(self.fb, x) + self.fc
+    
+    def upd_with_decision(self, t: int, x_t: np.ndarray):
         """
-        decide whether contaminated at (t>0)-th round.
+        get x_t at the beginning of t-th round, calculate f_t
         """
-        if self.KlogT: 
-            return math.floor(np.log(t+1) * self.mul) \
-                 > math.floor(np.log(t) * self.mul)
+        if self.t + 1 != t:
+            print(f"Err: Loss function at round {self.t} upd by x[{t}].")
+            raise(SystemError)
+        self.t += 1
+        _x, _minF = self.argminF, self.minF
+        if self.is_contaminated[self.t]:
+            # f_t(x) = v * x, s.t. |v| = G, v perpendicular to x_t and last FB
+            # v
+            _, _, vh = np.linalg.svd(np.array([x_t, self.FB]))
+            v = vh[-1] / np.linalg.norm(vh[-1]) * self.G
+            if max(abs(np.dot(v, x_t)), abs(np.dot(v, self.FB))) > self.eps:
+                print("Err: v is not perpendicular.")
+                raise(SystemError)
+            self.FB += v
+            # upd
+            self.argminF, self.minF = self.cal_minimum(self.FA, self.FB)
+            self.fa, self.fb, self.fc = 0., v, 0. # - self.minF + _minF
         else:
-            return math.floor((np.log(t+1) ** 2) * self.mul) \
-                 > math.floor((np.log(t) ** 2) * self.mul) \
+            # f_t(x) = v * x + \sigma / 2 * (|x-x_t|^2 - |x_t|^2)
+            #        = (v - \sigma x_t) * x + \sigma / 2 * |x|^2
+            # u in X, s.t. |u - x_{t-1}^*| = G / sigma_{1:t}
+            # v = G * (x_t - u) / |x_t - u|
+            self.FA += self.sigma / 2
+            # u
+            if np.linalg.norm(_x) < self.eps: u = np.zeros(self.dim)
+            else: u = _x - _x / np.linalg.norm(_x) * (self.G / self.FA / 2)
+            if np.linalg.norm(u)> self.R:
+                # print(f'u at {self.t}!')
+                u = u / np.linalg.norm(u) * self.R
+            # v - \sigma x_t
+            if np.linalg.norm(x_t - u) < self.eps:
+                v = np.ones(self.dim) / np.sqrt(self.dim) * self.G - self.sigma * x_t
+            else: v = self.G * (x_t - u) / np.linalg.norm(x_t - u) - self.sigma * x_t
+            self.FB += v
+            # upd
+            self.argminF, self.minF = self.cal_minimum(self.FA, self.FB)
+            self.fa, self.fb, self.fc = self.sigma / 2, v, 0. # - self.minF + _minF
+        # print(f'loss func {id(self)} upd into {self.t}')
+        # print(f'f[{self.t}] = {self.fa, self.fb}')
+        # print(f'at round {t}, receive ', x_t)
+        # print(f'  f[{t}](x) : fa = {self.fa}, fb = {self.fb}, fc = {self.fc}')
     
     def cal_minimum(self, a, b):
         """
-        calculate minimum of F(x) = a x^2 + b x, where |x|_2 <= D
+        calculate minimum of F(x) = a x^2 + b x, where |x|_2 <= R
         """
         x = - b / (a * 2)
         norm = np.linalg.norm(x)
-        if norm> self.D: x *= self.D / norm
-        return a * np.dot(x, x) + np.dot(b, x)
+        if norm> self.R:
+            # print(f'- x* at {self.t}!')
+            x = x / norm * self.R
+        return x, a * np.dot(x, x) + np.dot(b, x)
     
 
 class ContaminatedOCO_E2(LossFunction):

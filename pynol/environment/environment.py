@@ -35,6 +35,7 @@ class Environment:
             environment.
         full_info (bool): Specify the type of feedback: full-information or
             bandit feedback.
+        oblivious (bool): False if loss function generated given the decision
 
     """
 
@@ -60,8 +61,15 @@ class Environment:
         self.surrogate_grad_func = surrogate_grad_func
         self.use_surrogate_grad = use_surrogate_grad
         self.full_info = full_info
+        self.oblivious = func_sequence.oblivious \
+            if hasattr(func_sequence, 'oblivious') \
+            else True
+        self.t = -1 # a time clock
 
     def __getitem__(self, t):
+        if self.t != t:
+            print(f"Err: env[{self.t}] called at round {t}.")
+            raise(SystemError)
         self.func = self.func_sequence[t]
         self.grad = None
         self.grad_func = None
@@ -112,3 +120,25 @@ class Environment:
         else:
             self.grad_func = grad_solver(self.func)
             return self.grad_func(x)
+
+    def upd_func_with_decision(self, t: int, x_t: np.ndarray):
+        """
+        Called with t and x_t at each round.
+        If it is oblivious, nothing will happen
+        """
+        self.t += 1
+        if self.t != t:
+            print(f"Err: env[{self.t}] updated at round {t}.")
+            raise(SystemError)
+        if self.oblivious == False:
+            if hasattr(self.func_sequence, 'upd_with_decision'):
+                self.func_sequence.upd_with_decision(self.t, x_t)
+            else:
+                print("Err: Assume non-oblivious, but loss func is not.")
+                raise(SystemError)
+            self.func = self.func_sequence[self.t]
+            self.grad = None
+            self.grad_func = None
+            self.surrogate_func = None
+            self.surrogate_grad = None
+            self.surrogate_grad_func = None

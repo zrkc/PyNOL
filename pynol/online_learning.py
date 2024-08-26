@@ -2,6 +2,7 @@ from multiprocessing import Pool
 from typing import Union
 import time
 import numpy as np
+import copy
 
 from pynol.environment.environment import Environment
 from pynol.learner.base import Base
@@ -30,9 +31,15 @@ def online_learning(T, env: Environment, learner: Union[Base, Model]):
     x = np.zeros((T, dimension))
     loss, surrogate_loss = np.zeros(T), np.zeros(T)
     tm = np.zeros(T)
+    _minF = 0. # min_x sum_{t=1}^T f_t(x)
     for t in range(T):
         start_time = time.time()
+        x[t] = learner.get_decision(env[t-1]) # after opt x with optimism
+        env.upd_func_with_decision(t, x[t]) # work if non-oblivious
+        minF = env.func_sequence.minF if hasattr(env.func_sequence, 'minF') else 0.
         x[t], loss[t], surrogate_loss[t] = learner.opt(env[t])
+        loss[t] = loss[t] + _minF - minF # sum loss = regret
+        _minF = minF
         tm[t] = time.time() - start_time
         if t % 100 == 0 and hasattr(learner, 'meta'): print(t, learner.meta.prob)
     return x, loss, surrogate_loss, tm
@@ -64,11 +71,14 @@ def multiple_online_learning(T, env: Environment, learners: list, processes=4):
     tm = np.zeros_like(loss)
     p = Pool(processes=processes)
     results = []
+    # copy env in case of non-oblivious
+    envs = [[copy.deepcopy(env) for j in range(num_repeat)]
+            for i in range(num_learners)]
     for i in range(num_learners):
         for j in range(num_repeat):
             results.append(
                 (i, j, p.apply_async(online_learning,
-                                     (T, env, learners[i][j]))))
+                                     (T, envs[i][j], learners[i][j]))))
     p.close()
     p.join()
     for i, j, result in results:

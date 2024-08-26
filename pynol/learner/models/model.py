@@ -47,6 +47,17 @@ class Model:
         self.internal_optimism_base = None
         self.internal_optimism_meta = None
 
+    def get_decision(self, env: Environment):
+        """
+        opt by optimism first,
+        then pay decision, update env
+        then opt by gradient with new env.
+        """
+        self.opt_by_optimism(env.optimism)
+        self.x_bases = self.schedule.x_active_bases
+        self.x = np.dot(self.meta.prob, self.x_bases)
+        return self.x
+
     def opt(self, env: Environment):
         """The optimization process of the base algorithm.
 
@@ -64,7 +75,7 @@ class Model:
                 loss (float): Origin loss at the current round. \n
                 surrogate_loss (float): the surrogate loss at the current round.
         """
-        self.opt_by_optimism(env.optimism)
+        # self.opt_by_optimism(env.optimism)
         return self.opt_by_gradient(env)
 
     def opt_by_optimism(self, optimism: Optional[np.ndarray]):
@@ -106,8 +117,8 @@ class Model:
         """
         self.env = env
         variables = vars(self)
-        self.x_bases = self.schedule.x_active_bases
-        self.x = np.dot(self.meta.prob, self.x_bases)
+        # self.x_bases = self.schedule.x_active_bases
+        # self.x = np.dot(self.meta.prob, self.x_bases)
 
         if env.full_info:
             loss, surrogate_loss = env.get_loss(self.x)
